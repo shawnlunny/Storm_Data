@@ -1,0 +1,113 @@
+---
+title: "Health and Economic Impact Analysis of NOAA Storm Database"
+output: html_document
+---
+
+#**Synopsis**
+This analysis looked at the NOAA Storm Database between the years 1950 and 2011. Research was done to calculate the economic and public welfare effects of inclimate weather in the United States. Many severe events can result in fatalities, injuries, and property damage, and preventing such outcomes to the extent possible is a key concern of this research.
+
+#**Data Processing**
+
+```{r load_libraries}
+
+library(dplyr)
+library(ggplot2)
+library(knitr)
+
+```
+
+I intentionally provide the original data set as downloaded incase the url ever fails so this research can be reproduced.
+First we need to unzip and read the data. I suppress generic library messages here to keep the output clean for readability purposes.
+
+```{r read_data_file, cache=TRUE}
+
+Storm_Data <- read.csv(file="repdata_data_StormData.csv.bz2", header=TRUE, sep=",", stringsAsFactors=FALSE)
+
+```
+
+Next to make the data processing a little more focused and time efficient, I reduce the data set to the core columns that we care about for the purpose of this processing. Notably storm type, fatalitites, injuries, and then calculate the total damage cost using an aggregate of other columns.
+
+In order to do this we need to normalize the data a bit. The measurement scale was a bit of a wild card (PROPDMGEXP, CROPDMGEXP) in that there were only 3 valid types (K, M, B) but ultimately several other made-up and innacurate types like (0, ?, H, etc).
+
+In the code block below we scale the damage fields according to their scale. For example a PROPDMG value of "12 wtih a PROPDMGEXP value of "K" would be $12,000. We also take the time to add property and crop damaage together to get a total damage value of each storm type.
+
+What you will also notice is that I use the mutate to drop the columns that I calculated to clean up the data set. Although a second mutate command was unnecessary, I wanted to show deliberate intent.
+
+```{r format_impact_data}
+
+impact <- select(Storm_Data, EVTYPE, FATALITIES, INJURIES, PROPDMG, PROPDMGEXP, CROPDMG, CROPDMGEXP) %>% mutate_at(c("PROPDMGEXP","CROPDMGEXP"), "toupper")
+
+impact <- 
+  impact %>% 
+  mutate(
+    PROPEXP = case_when(PROPDMGEXP == "K" ~ PROPDMG * 1000,
+                        PROPDMGEXP == "M" ~ PROPDMG * 1000000,
+                        PROPDMGEXP == "B" ~ PROPDMG * 1000000000,
+                        TRUE ~ 0),
+    CROPEXP = case_when(CROPDMGEXP == "K" ~ CROPDMG * 1000, 
+                        CROPDMGEXP == "M" ~ CROPDMG * 1000000,
+                        CROPDMGEXP == "B" ~ CROPDMG * 1000000000,
+                        TRUE ~ 0),
+    TOTALDMG = PROPEXP + CROPEXP
+  ) %>% 
+  mutate(PROPDMG = NULL, PROPDMGEXP = NULL, CROPDMG = NULL, CROPDMGEXP = NULL, PROPEXP = NULL, CROPEXP = NULL)
+
+```
+
+Once you get into the data you realize that there are many synonyms for the same weather events. For example, freeze, frost, and glaze are the same. Below you will see several aggregations of data as the same weather type.
+
+**The order is important**,as some names share commonalities such as "wind" but are deceptive in their title. An example is hurricane wind, wind chill, and strong winds which clearly are not the same. So care was taken to aggregate the major event names with the traditional category of wind near the bottom of the aggregation list.
+
+
+```{r group_impact_data}
+
+impact <- 
+  impact %>%
+  mutate(
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*tornado*"), EVTYPE, ignore.case = TRUE), "TORNADO"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*hurricane*|*surge*|typhoon"), EVTYPE, ignore.case = TRUE), "HURRICANE"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*lightning*"), EVTYPE, ignore.case = TRUE), "LIGHTNING"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*thunderstorm*"), EVTYPE, ignore.case = TRUE), "THUNDERSTORM"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*flood*|*fld*"), EVTYPE, ignore.case = TRUE), "FLOOD"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*heat*|*warm*"), EVTYPE, ignore.case = TRUE), "HEAT"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*cold*|*wind*ch*"), EVTYPE, ignore.case = TRUE), "COLD"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*rain*"), EVTYPE, ignore.case = TRUE), "RAIN"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*snow*|*blizzard*|*winter*|*ice*|*icy*"), EVTYPE, ignore.case = TRUE), "SNOW/ICE/WINTER STORM"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*hail*"), EVTYPE, ignore.case = TRUE), "HAIL"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*fire*"), EVTYPE, ignore.case = TRUE), "WILD FIRE"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*wind*"), EVTYPE, ignore.case = TRUE), "WIND"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*freeze*|*frost*|*glaze*"), EVTYPE, ignore.case = TRUE), "FROST/FREEZE"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*tropical*"), EVTYPE, ignore.case = TRUE), "TROPICAL STORM"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*fog*"), EVTYPE, ignore.case = TRUE), "FOG"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*rip*current*"), EVTYPE, ignore.case = TRUE), "RIP CURRENTS"),
+    EVTYPE = replace(EVTYPE, grepl(glob2rx("*surf*"), EVTYPE, ignore.case = TRUE), "SURF")
+  ) %>%
+  group_by(EVTYPE) %>%
+  summarise(OBSERVATIONS = n(), FATALITIES = sum(FATALITIES), INJURIES = sum(INJURIES), TOTALDMG = sum(TOTALDMG)) %>%
+  arrange(desc(TOTALDMG, FATALITIES, INJURIES))
+
+```
+
+#**Results**
+
+#**Questions**
+##1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?
+
+Tornados are clearly the number one leading cause of injury and death with just under 100,000 combined injuries and fatalitites.
+
+```{r impact_health_consequences}
+
+impact$EVTYPE <- factor(impact$EVTYPE, levels = impact$EVTYPE[order(impact$FATALITIES+impact$INJURIES)])
+ggplot(data=head(impact, 20), aes(x = EVTYPE, y = FATALITIES + INJURIES)) + geom_bar(stat="identity", fill="deepskyblue2") + labs(title = "Fatalities and Injuries by Weather Type", caption = "Tornadoes are the biggest threat to human health", x="WEATHER TYPE") + theme(plot.title = element_text(size=18), plot.caption = element_text(size = 14)) + coord_flip()
+
+```
+
+##2. Across the United States, which types of events have the greatest economic consequences?
+
+Floods, hurricanes, and tornadoes have the largest economic impact by a sizable margin.
+
+```{r impact_economic_consequences}
+
+kable(head(impact,20), digits = 0, format.args = list(big.mark = ','))
+
+```
